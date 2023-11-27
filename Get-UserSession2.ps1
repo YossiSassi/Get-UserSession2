@@ -117,7 +117,7 @@ $HostsToQuery | Foreach {
             }
             
             # write short results to console
-            if ($Lines) {$Lines | foreach {Write-Host "$Computer logged in by $($_.split(",")[2]) via $($_.split(",")[1])" -ForegroundColor Cyan}}
+            if ($Lines) {$Lines | foreach {Write-Host "$($_.split(",")[2]) has a session at $Computer via $($_.split(",")[1])" -ForegroundColor Cyan}}
 
             # add data to global session list + update CSV report file
 		    $global:SessionList += $Lines;
