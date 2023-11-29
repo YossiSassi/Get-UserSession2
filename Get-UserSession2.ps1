@@ -17,7 +17,9 @@ Default is empty/optional - entire domain is queried for all online hosts.
 .LINK
 Comments welcome to 1nTh35h311 (yossis@protonmail.com)
 
+v1.0.2 - Better reflection of SessionType & LogonTime according to permissions (if admin or not) + Opens a grid instead of a query loop in the console, if powershell_ise is installed
 v1.0.1 - added a warning when path contains space (fixes issue with empty results)
+v1.0 - Initial script (based on www.github.com/yossisassi/get-usersession)
 #>
 param (
     [cmdletbinding()]
@@ -28,7 +30,7 @@ param (
 # general settings
 [boolean]$DisaplySessionsToConsole = $false;
 $CurrentUserNames = $(whoami.exe), "$env:COMPUTERNAME\$env:USERNAME";
-#$CurrentComputerName = ([adsisearcher]"samaccountname=$($env:COMPUTERNAME)$").FindOne().Properties.dnshostname;
+$CurrentComputerName = ([adsisearcher]"samaccountname=$($env:COMPUTERNAME)$").FindOne().Properties.dnshostname;
 
 $DomainName = ([adsi]'').name;
 $ReportFile = "$(Get-Location)\Sessions_$($DomainName)_$(Get-Date -Format ddMMyyyyHHmmss).csv";
@@ -152,7 +154,26 @@ Remove-Item $psLoggedOnPath -Force;
 if ($TotalSessionFound -ne 0) {
     # convert session data to CSV
     $sessionCSV = $global:SessionList | ConvertFrom-Csv -ErrorAction SilentlyContinue;
+
+    # Rename properties according to whether ran as admin or not
+    [int]$TotalUniqueLogonTimes = ($sessionCSV | Where-Object SessionType -eq 'interactive' | where {$_.username -notin $CurrentUserNames -and $_.computername -ne $CurrentComputername} | select LogonTimeInteractive -Unique | Measure-Object).Count;
     
+    if ($TotalUniqueLogonTimes -ge 2) { # ran as admin, since we have timestamps for at least one interactive user(s)
+            $sessionCSV | Where-Object {$_.SessionType -eq "Interactive" -and $_.LogonTimeInteractive -eq "RunAs_Or_NoAdminPermissions"} | ForEach-Object {
+                Add-Member -InputObject $_ -Name LogonTimeInteractive -Value "N/A" -MemberType NoteProperty -Force;
+                Add-Member -InputObject $_ -Name SessionType -Value "RunAs" -MemberType NoteProperty -Force;
+            }
+        }
+    else { # ran as non-admin, so no way to tell remotely the logon timestamp, and/or if RDP/interactive console or from Run As
+            $sessionCSV | Where-Object {$_.SessionType -eq "Interactive" -and $_.LogonTimeInteractive -eq "RunAs_Or_NoAdminPermissions"} | ForEach-Object {
+                Add-Member -InputObject $_ -Name LogonTimeInteractive -Value "TryWithAdminPermissions" -MemberType NoteProperty -Force;
+                Add-Member -InputObject $_ -Name SessionType -Value "RunAs_OR_Interactive" -MemberType NoteProperty -Force;
+            }
+        }
+    
+    # Update csv
+    $sessionCSV | Export-Csv $ReportFile -NoTypeInformation -Force;
+
     # display stats grouped by session types
     $sessionCSV | Group-Object SessionType | select @{n='SessionType';e={$_.Name}}, Count | sort Count -Descending;
     
@@ -165,6 +186,12 @@ if ($TotalSessionFound -ne 0) {
     }
 
     if ($global:SessionList.Count -ge 2) {
+    # check if ISE exists, to open the grid with full results
+    if (Get-Command powershell_ise -ErrorAction SilentlyContinue) 
+        {
+            $sessionCSV | Out-GridView -Title "Get-UserSession2: ACCOUNT SESSIONS"
+        }
+    else {
     # allow in memory query of the collected sessions info
     Do {
         Write-Host "Type the username you wish to see the Session(s) for, or press ENTER to exit:" -ForegroundColor Yellow
@@ -173,8 +200,8 @@ if ($TotalSessionFound -ne 0) {
         }
         until ($username -eq '')
     }
-
     Write-Host Type '$global:SessionList' to see the full session list in memory, in CSV format -ForegroundColor Magenta;
+  }
 }
 else {
     Remove-Item $ReportFile;
