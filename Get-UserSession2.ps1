@@ -17,6 +17,7 @@ Default is empty/optional - entire domain is queried for all online hosts.
 .LINK
 Comments welcome to 1nTh35h311 (yossis@protonmail.com)
 
+v1.0.3 - added an option to query other domains than the currently logged on user's domain (new parameter - $DomainDnsName)
 v1.0.2 - Better reflection of SessionType & LogonTime according to permissions (if admin or not) + Opens a grid instead of a query loop in the console, if powershell_ise is installed
 v1.0.1 - added a warning when path contains space (fixes issue with empty results)
 v1.0 - Initial script (based on www.github.com/yossisassi/get-usersession)
@@ -24,7 +25,8 @@ v1.0 - Initial script (based on www.github.com/yossisassi/get-usersession)
 param (
     [cmdletbinding()]
     [parameter(mandatory=$false)]
-    [string[]]$ComputerName
+    [string[]]$ComputerName,
+    [string]$DomainDnsName
 )
 
 # general settings
@@ -32,16 +34,32 @@ param (
 $CurrentUserNames = $(whoami.exe), "$env:COMPUTERNAME\$env:USERNAME";
 $CurrentComputerName = ([adsisearcher]"samaccountname=$($env:COMPUTERNAME)$").FindOne().Properties.dnshostname;
 
-$DomainName = ([adsi]'').name;
-$ReportFile = "$(Get-Location)\Sessions_$($DomainName)_$(Get-Date -Format ddMMyyyyHHmmss).csv";
+if ($DomainDnsName)
+    {
+        $DomainName = ($DomainDnsName).ToUpper()
+    }
+else
+    {
+        $DomainName = ($env:USERDNSDOMAIN).ToUpper()
+    }
+
 $CurrentDirectory = Get-Location;
 
 if (!$ComputerName)
     {
+        $ReportFile = "$(Get-Location)\Sessions_$($DomainName)_$(Get-Date -Format ddMMyyyyHHmmss).csv";
         Write-Host "Querying all enabled & accessible computer accounts in domain $DomainName... (Default)" -ForegroundColor Green;
-        # Get all Enabled computer accounts 
-        #$Computers = Get-ADComputer -Filter {Enabled -eq 'true'}
-        $Searcher = New-Object DirectoryServices.DirectorySearcher([ADSI]"");
+        
+        # Get all Enabled computer accounts         
+        #$Computers = Get-ADComputer -Filter {Enabled -eq 'true'} -Server $DomainName #FQDN
+        # Create a context using the FQDN of the domain
+        $context = New-Object System.DirectoryServices.ActiveDirectory.DirectoryContext("Domain", $DomainName)
+        # Get the domain using the context
+        $domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetDomain($context)
+        # Get the domain directory entry/object
+        $domainDE = $domain.GetDirectoryEntry()
+        
+        $Searcher = New-Object DirectoryServices.DirectorySearcher -ArgumentList $domainDE;
         $Searcher.Filter = "(&(objectClass=computer)(!userAccountControl:1.2.840.113556.1.4.803:=2))";
         $Searcher.PageSize = 100000; # by default, 1000 are returned for adsiSearcher. this script will handle up to 100K acccounts.
         $Computers = ($Searcher.Findall());
@@ -50,6 +68,7 @@ if (!$ComputerName)
     }
 else # specific computer(s) specified
     {
+        $ReportFile = "$(Get-Location)\Sessions_$(Get-Date -Format ddMMyyyyHHmmss).csv";
         Write-Host "Querying computers specified. " -NoNewline -ForegroundColor Yellow; Write-Host " Run without any parameters to query ALL computers in domain $DomainName." -ForegroundColor Green;
         $HostsToQuery = $ComputerName;
         $TotalCount = ($ComputerName | Measure-Object).Count;
